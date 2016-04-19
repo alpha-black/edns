@@ -1,0 +1,10 @@
+Query Public DNS servers with EDNS
+
+1. In Eduroam
+    Host - FD1 - FD2
+    Query Additional section contains Host and FD1 IP address.
+    Option = 0
+    DNS IP - 130.233.224.132, 130.233.224.140, 130.233.224.141
+    Response - No EDNS entries
+
+2. 
