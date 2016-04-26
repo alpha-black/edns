@@ -1,10 +1,32 @@
 Query Public DNS servers with EDNS
+Host - DNSForwarder1 - DNSForwarder2 - Public DNS Server
+Query Additional section contains Host (14) and DNSForwarder1 IP addresses (15).
+[Option codes in (brackets)] or only one with 65001
 
-1. In Eduroam
-    Host - FD1 - FD2
-    Query Additional section contains Host and FD1 IP address.
-    Option = 0
+1. Eduroam, Aalto Open, Aalto
     DNS IP - 130.233.224.132, 130.233.224.140, 130.233.224.141
     Response - No EDNS entries
 
-2. 
+2. Google
+  DNS IP - 8.8.8.8
+  Response - No EDNS entries
+
+http://pcsupport.about.com/od/tipstricks/a/free-public-dns-servers.htm
+3. DNS Watch
+  DNS IP - 84.200.69.80
+  Response - No EDNS entries
+
+4. Verisign
+  DNS IP - 64.6.64.6
+  Response - No EDNS entries
+
+5. Level3
+  DNS IP - 	209.244.0.3
+  Response - No EDNS entries, No additional section
+
+6. Comodo Secure DNS
+  DNS IP - 8.26.56.26
+  Response - No EDNS entries
+
+TODO
+7.

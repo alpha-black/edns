@@ -4,24 +4,33 @@ import socket
 import dns.message
 import dns.edns
 
+""" Host details - IP address, Port and Protocol """
+EDNS_OPTION_CODE_HOST = 14
+
+""" Tree of forwarder IP address """
+EDNS_OPTION_CODE_FWDR = 15
+
 class Edns (dns.edns.Option):
-    def __init__ (self, ip, option = 0):
-        super(Edns, self).__init__(option)
-        """ Currently only IPv4 """
-        self.ip = ip
+    def __init__ (self,ip, port = 0, option = 0, data = b''):
+        super (Edns, self).__init__(option)
+        self.ip = socket.inet_aton (ip)
+        self.port = port
+        self.data = data
 
     def to_wire (self, file):
-        print ('EDNS to wire')
-        data = socket.inet_pton (socket.AF_INET, self.ip)
-        file.write (data)
+        self.data += self.ip
+        if (self.port != 0):
+            self.data += struct.pack ("!H", self.port)
+        file.write (self.data)
 
     def from_wire (cls, otype, wire, current, olen):
         return
 
 class EdnsForwarderServer (asyncio.DatagramProtocol):
-    def __init__ (self, loop, option = 0):
+    def __init__ (self, loop, remote_ip_string, remote_port):
         self.loop = loop
-        self.option = option
+        self.remote_ip_string = remote_ip_string
+        self.remote_port = remote_port
 
     def connection_made (self, transport):
         print ('Connection Made')
@@ -31,23 +40,39 @@ class EdnsForwarderServer (asyncio.DatagramProtocol):
     def datagram_received (self, data, addr):
         print ('Datagram Received from Client {0}'.format (addr))
         self.host_addr = addr
+        found_host_edns = False
+        found_frwdr_ends = False
 
-        """ Client IP """
-        #self.client_ip = struct.unpack("!I", socket.inet_aton(addr[0]))[0]
-        #self.client_ip = struct.pack('4B', *(int(x) for x in addr[0].split('.')))
-
-        """ EDNS """
+        """ Read the DNS message received """
         dns_message = dns.message.from_wire (data)
-        edns_obj = Edns (addr[0], self.option)
-        dns_message.use_edns (options=[edns_obj])
 
-        print ('data {0}'. format (data))
+        edns_options = []
 
-        """ Forward to public server """
+        """ Get Forwarder ENDS if present in the query """
+        for options in dns_message.options:
+            if (options.otype == EDNS_OPTION_CODE_HOST):
+                found_host_edns = True
+                edns_options.append (options)
+            elif (options.otype == EDNS_OPTION_CODE_FWDR):
+                found_frwdr_ends = True
+                edns_obj = Edns (addr[0], addr[1], EDNS_OPTION_CODE_FWDR,
+                                 options.data)
+                edns_options.append (edns_obj)
+
+        """ Add Host ENDS """
+        if (found_host_edns == False):
+            edns_obj = Edns (addr[0], addr[1], EDNS_OPTION_CODE_HOST)
+            edns_options.insert (0, edns_obj)
+        elif (found_frwdr_ends == False):
+            edns_obj = Edns (addr[0], addr[1], EDNS_OPTION_CODE_FWDR)
+            edns_options.append (edns_obj)
+
+        dns_message.use_edns (options=edns_options)
+
+        """ Forward to next server """
         self.loop.create_task (self.loop.create_datagram_endpoint (
             lambda: EdnsForwarderClient (self.callback, dns_message),
-            #remote_addr = ('8.8.8.8', 53))
-            remote_addr = ('127.0.0.1', 5354))
+            remote_addr = (self.remote_ip_string, self.remote_port))
         )
         return
 
@@ -78,7 +103,6 @@ class EdnsForwarderClient (asyncio.DatagramProtocol):
         print ('Datagram Received from Server')
         response = dns.message.from_wire (data)
         for rr in response.answer:
-            #string = 'Answer = ' + response.name.to_text()
             print ('{0}\n'.format(rr.to_text()))
         self.callback (response)
         return
@@ -92,12 +116,17 @@ class EdnsForwarderClient (asyncio.DatagramProtocol):
         return
 
 def main ():
-    option = 0
+    import argparse
+    parser = argparse.ArgumentParser ('EDNSForwarder')
+    parser.add_argument ('port', type = int, help = 'Port number to listen on')
+    parser.add_argument ('remote_ip', type = str, help = 'DNS Server or next hop forwarder IP')
+    parser.add_argument ('remote_port', type = int, help = 'DNS Server or next hop forwarder port')
+    args = parser.parse_args ()
 
     loop = asyncio.get_event_loop ()
     loop.create_task (loop.create_datagram_endpoint (
-        lambda : EdnsForwarderServer (loop, option),
-        local_addr = ('127.0.0.1', 53)))
+        lambda : EdnsForwarderServer (loop, args.remote_ip, args.remote_port),
+        local_addr = ('127.0.0.1', args.port)))
     loop.run_forever ()
     transport.close ()
     loop.close ()
