@@ -4,6 +4,17 @@ import socket
 import dns.message
 import dns.edns
 
+"""
+EDNS_OPTION_CODE_FWDR Format
+
+|0 1 2 3 4 5 6 7 | 0 1 2 3 4 5 6 7 | 0 1 2 3 4 5 6 7 | 0 1 2 3 4 5 6 7 |
+|                            IPv4 Address                              |
+|__________________________________|___________________________________|
+|           Port Number            |              Protocol             |
+|__________________________________|___________________________________|
+
+"""
+
 """ Host details - IP address, Port and Protocol """
 EDNS_OPTION_CODE_HOST = 14
 
@@ -11,16 +22,16 @@ EDNS_OPTION_CODE_HOST = 14
 EDNS_OPTION_CODE_FWDR = 15
 
 class Edns (dns.edns.Option):
-    def __init__ (self,ip, port = 0, option = 0, data = b''):
+    def __init__ (self,ip, port = 0, proto = 0, option = 0, data = b''):
         super (Edns, self).__init__(option)
         self.ip = socket.inet_aton (ip)
         self.port = port
+        self.proto = proto
         self.data = data
 
     def to_wire (self, file):
         self.data += self.ip
-        if (self.port != 0):
-            self.data += struct.pack ("!H", self.port)
+        self.data += struct.pack ("!HH", self.port, self.proto)
         file.write (self.data)
 
     def from_wire (cls, otype, wire, current, olen):
@@ -39,7 +50,7 @@ class EdnsForwarderServer (asyncio.DatagramProtocol):
 
     def datagram_received (self, data, addr):
         print ('Datagram Received from Client {0}'.format (addr))
-        self.host_addr = addr
+        self.c_addr = addr
         found_host_edns = False
         found_frwdr_ends = False
 
@@ -54,17 +65,21 @@ class EdnsForwarderServer (asyncio.DatagramProtocol):
                 found_host_edns = True
                 edns_options.append (options)
             elif (options.otype == EDNS_OPTION_CODE_FWDR):
+                if (len (options.data) % 8 != 0):
+                    print ("Wrong formatted ENDS Forwarder")
+                    return
                 found_frwdr_ends = True
-                edns_obj = Edns (addr[0], addr[1], EDNS_OPTION_CODE_FWDR,
-                                 options.data)
+                edns_obj = Edns (addr[0], addr[1], option=EDNS_OPTION_CODE_FWDR,
+                                 data=options.data)
                 edns_options.append (edns_obj)
 
         """ Add Host ENDS """
         if (found_host_edns == False):
-            edns_obj = Edns (addr[0], addr[1], EDNS_OPTION_CODE_HOST)
+            print ("Adding host edns")
+            edns_obj = Edns (addr[0], addr[1], option=EDNS_OPTION_CODE_HOST)
             edns_options.insert (0, edns_obj)
         elif (found_frwdr_ends == False):
-            edns_obj = Edns (addr[0], addr[1], EDNS_OPTION_CODE_FWDR)
+            edns_obj = Edns (addr[0], addr[1], option=EDNS_OPTION_CODE_FWDR)
             edns_options.append (edns_obj)
 
         dns_message.use_edns (options=edns_options)
@@ -85,7 +100,7 @@ class EdnsForwarderServer (asyncio.DatagramProtocol):
         return
 
     def callback (self, data):
-        self.transport.sendto (data.to_wire (), self.host_addr)
+        self.transport.sendto (data.to_wire (), self.c_addr)
         return
 
 
