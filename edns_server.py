@@ -148,7 +148,7 @@ class EdnsServer (asyncio.DatagramProtocol):
                 """ If the time out has not expired, deny service """
                 time_recvd = time.time ()
                 if (time_recvd - db_entry[1] < MAX_QUERIES_TIMEOUT):
-                    self.client_edns_db.pop (host_ip)
+                    #self.client_edns_db.pop (host_ip)
                     self.no_service = True
                     return
                 else:
