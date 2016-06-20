@@ -13,19 +13,90 @@ EDNS_OPTION_CODE_HOST = 14
 """ Tree of forwarder IP address """
 EDNS_OPTION_CODE_FWDR = 15
 
-"""
- Max 3 queries in 100 seconds from a host
-"""
-MAX_QUERIES_TIMEOUT = 100
+MAX_QUERIES_TIMEOUT = 1000000
 MAX_QUERIES = 3
+
+class RateLimiting ():
+    def __init__ (self):
+        self.host_list = dict ()
+        self.forwarder_list = dict()
+
+    """ host_list = {host_ip : [time_stamp, port, proto, query_id,
+                                count]} """
+
+    """ forwarder_list = {xor ip: [[time stamp, count, question],
+                   [ip, port, proto], [ip, port, proto], ..]} """
+
+    def process_edns_host (self, host_ip, host_port, host_proto):
+        return self.lookup_and_add_host (host_ip, [time.time(), host_port,
+                                         host_proto])
+
+    def process_edns_forwarder_list (self, forwarder_list):
+        return True
+
+    def add_to_host_list (self, host_ip, host_details):
+        self.host_list.update ({host_ip : host_details})
+
+    def lookup_host (self, host_ip):
+        return self.host_list.get (host_ip)
+
+    def lookup_and_add_host (self, host_ip, host_details):
+        """ If entry does not exist """
+        if not self.lookup_host (host_ip):
+            # Count = 1, New entry
+            host_details.append (1)
+            self.add_to_host_list (host_ip, host_details)
+            return True
+        else:
+            host_list_entry = self.host_list[host_ip]
+            
+            if host_list_entry[3] < MAX_QUERIES:
+                """ If the number of queries < MAX_QUERIES, update number of queries
+                and servie the request """
+                host_list_entry[3] += 1
+                return True
+            else:
+                """ If mx queries exceeds and time not expired """
+                time_recvd = time.time ()
+                if (time_recvd - host_list_entry[0] < MAX_QUERIES_TIMEOUT):
+                    return False
+                else:
+                    """ Reset query count and time """
+                    host_list_entry[3] = 1
+                    host_list_entry[0] = time.time()
+                    return True
+        return True
+
+    def add_to_forwarder_list (self, key, value):
+        self.forwarder_list.update ({key : value})
+
+    def lookup_forwarder (self, key):
+        return self.forwarder_list.get (key)
+
+    def lookup_and_add_forwarder (self, key, value):
+        if not self.lookup_forwarder (key):
+            self.add_to_forwarder_list (key, value)
+            return True
+        else:
+            forwarder_entry = self.forwarder_list[key]
+            if forwarder_entry[0][1] < MAX_QUERIES:
+                forwarder_entry[0][1] += 1
+                return True
+            else:
+                if (time.time() - forwarder_entry[0][0] < MAX_QUERIES_TIMEOUT):
+                    return False
+                else:
+                    forwarder_entry[0][0] = time.time()
+                    forwarder_entry[0][1] = 1
+                    return True
+        return True
+
 
 class EdnsServer (asyncio.DatagramProtocol):
     def __init__(self, loop, zone):
         self.loop = loop
         self.zone = zone
-        """ DB for storing EDNS, nothing to do with the db file. Change naming """
-        self.client_edns_db = dict ()
-        self.no_service = False
+        self.rate_limit = RateLimiting ()
 
     def connection_made (self, transport):
         print ('Connection Made to Server')
@@ -48,10 +119,7 @@ class EdnsServer (asyncio.DatagramProtocol):
 
     def process_dns_query (self, dns_query, addr):
 
-        self.process_edns (dns_query)
-
-        if (self.no_service == True):
-            self.no_service = False
+        if not self.process_edns (dns_query):
             print ("Deny service!")
             return
 
@@ -77,89 +145,38 @@ class EdnsServer (asyncio.DatagramProtocol):
 
 
     def process_edns (self, dns_query):
+        question = dns_query.question[0]
 
-        #print ("Query id {0}".format(dns_query.id))
-
-        """ Handle EDNS """
         for options in dns_query.options:
-            if (options.otype == EDNS_OPTION_CODE_HOST or
-                options.otype == EDNS_OPTION_CODE_FWDR):
+            if (options.otype != EDNS_OPTION_CODE_HOST and
+                options.otype != EDNS_OPTION_CODE_FWDR):
+                continue
 
-                data_len = len (options.data)
-                if (data_len % 8 != 0):
-                    print ("Wrong formatted ENDS options")
-                    return
+            data_len = len (options.data)
+            if (data_len % 8 != 0):
+                print ("Wrong formatted ENDS options")
+                return
 
-                if (options.otype == EDNS_OPTION_CODE_HOST):
-                    #if (len (options.data) / 8 != 1)
-                    #    print ("Wrong formatted ENDS Host")
-                    #    return
-                    host_ip_string = socket.inet_ntoa (options.data [:4])
-                    (host_ip, host_port, host_proto) = struct.unpack ("!LHH", options.data)
-
-                    print ("Host details")
-                    print ('IP {0} port {1} proto {2}'.format (host_ip_string,
-                                                               host_port, host_proto))
-                else:
-                    forwarder_list = []
-                    num_frwdrs = (int) (len (options.data) / 8)
-                    for i in range (0, num_frwdrs):
-                        ip_string = socket.inet_ntoa (options.data [8*i:8*i+4])
-                        (ip, port, proto) = struct.unpack ("!LHH", options.data [8*i:8*(i+1)])
-                        forwarder_list.append([ip, port, proto, ip_string])
-
-                    print ("Forwarder details")
-                    for (ip, port, proto, ip_string) in forwarder_list:
-                        print ('IP {0} port {1} proto {2}'.format (ip_string, port, proto))
-
-        """ Generate key for client_edns_db """
-        """
-        key_obj = hashlib.new ('sha256')
-        key_obj.update (str (host_ip) + str (dns_query.id))
-        key = key_obj.hexdigest()[:32]
-        """
-        client_db_val = []
-
-        """ If no entry for the host exists """
-        if (self.client_edns_db.get (host_ip) == None):
-            """ Key = Host IP
-                Val =  Number of queries, Time stamp, Host Port, Host Proto,
-                       All Forwarder details (IP, Port, Proto)
-            """
-            client_db_val.append (1)
-            client_db_val.append (time.time())
-            client_db_val.append (host_port)
-            client_db_val.append (host_proto)
-
-            for forwarder_val in forwarder_list:
-                for val in forwarder_val:
-                    client_db_val.append (val)
-            client_db_entry = {host_ip: client_db_val}
-            self.client_edns_db.update (client_db_entry)
-        else:
-            db_entry = self.client_edns_db[host_ip]
-            """ If the number of queries < MAX_QUERIES, update number of queries
-                and servie the request """
-            if (db_entry[0] < MAX_QUERIES):
-                db_entry[0] += 1
-                client_db_entry = {host_ip: db_entry}
-                self.client_edns_db.update (client_db_entry)
-            else:
-                """ If the time out has not expired, deny service """
-                time_recvd = time.time ()
-                if (time_recvd - db_entry[1] < MAX_QUERIES_TIMEOUT):
-                    #self.client_edns_db.pop (host_ip)
-                    self.no_service = True
-                    return
-                else:
-                    """ Set time stamp to current value and queries to 1 and service
-                        the request
-                    """
-                    db_entry[0] = 1
-                    db_entry[1] = time_recvd
-                    client_db_entry = {host_ip: db_entry}
-                    self.client_edns_db.update (client_db_entry)
-        return
+            if (options.otype == EDNS_OPTION_CODE_HOST):
+                (host_ip, host_port, host_proto) = struct.unpack ("!LHH", options.data)
+                self.rate_limit.process_edns_host (host_ip, host_port, host_proto)
+                #if not self.db.lookup_and_add_host (host_ip, [time.time(), host_port,
+                #                                    host_proto, dns_query.id]):
+                #    return False
+            elif (options.otype == EDNS_OPTION_CODE_FWDR):
+                forwarder_list = []
+                #key = 0
+                #num_frwdrs = (int) (len (options.data) / 8)
+                for i in range (0, num_frwdrs):
+                    (ip, port, proto) = struct.unpack ("!LHH", options.data [8*i:8*(i+1)])
+                    #key ^= ip
+                    forwarder_list.append([ip, port, proto])
+                self.rate_limit.process_edns_forwarder_list (forwarder_list)
+                #Add time and tries
+                #forwarder_list.insert (0, [time.time (), 1, question])
+                #if not self.db.lookup_and_add_forwarder (key, forwarder_list):
+                #    return False
+        return True
 
 
 def main ():
