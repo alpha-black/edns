@@ -63,11 +63,13 @@ class RateLimiting ():
     def _cmp_host_proto (self, proto1, proto2):
         return proto1 == proto2
 
-    def _get_host_mac_hash (self, host_mac):
-        mac = ''
-        for i in range (0, 6):
-            mac += str (host_mac[i])
-        return hashlib.sha256 (mac.encode('utf-8')).hexdigest()[:10]
+
+    #def _get_host_mac_hash (self, host_mac):
+    #    mac = ''
+    #    for i in range (0, 6):
+    #        mac += str (host_mac[i])
+    #    return hashlib.sha256 (mac.encode('utf-8')).hexdigest()[:10]
+
 
     def _get_forwarder_list_key (self, forwarder_list):
         forwarder_ip_key = 0
@@ -129,10 +131,10 @@ class RateLimiting ():
 
     def _rl_host_mac (self, host_details, host_mac):
         current_request_time = time.time()
-        host_mac_hash = self._get_host_mac_hash (host_mac)
-        host_mac_entry = _lookup_dict (HOST_MAC_LIST, host_mac_hash)
+        #host_mac_hash = self._get_host_mac_hash (host_mac)
+        host_mac_entry = _lookup_dict (HOST_MAC_LIST, host_mac)
         if not host_mac_entry:
-            self._add_to_dict (HOST_MAC_LIST, host_mac_hash, [current_request_time,
+            self._add_to_dict (HOST_MAC_LIST, host_mac, [current_request_time,
                                host_details[0]])
             return True
         elif ((host_mac_entry[2] != host_details[0]) and
@@ -308,22 +310,17 @@ class EdnsServer (asyncio.DatagramProtocol):
         host_details = []
         query_id = 0
         host_ip = host_port = host_proto = 0
-        host_mac = []
+        host_mac = ''
 
         for options in dns_query.options:
-            if (options.otype != EDNS_OPTION_CODE_HOST and
-                options.otype != EDNS_OPTION_CODE_FWDR):
-                continue
-
-            data_len = len (options.data)
-            if (data_len % 8 != 0):
-                print ("Wrong formatted ENDS options")
-                return
-
             if (options.otype == EDNS_OPTION_CODE_HOST):
-                (host_ip, host_port, host_proto) = struct.unpack ("!LHH", options.data)
+                (host_ip, host_port, host_proto) = struct.unpack ("!sHH", options.data)
                 host_details = [host_ip, host_port, host_proto]
             elif (options.otype == EDNS_OPTION_CODE_FWDR):
+                data_len = len (options.data)
+                if (data_len % 8 != 0):
+                    print ("Wrong formatted ENDS options")
+                    return
                 num_frwdrs = (int) (data_len / 8)
                 for i in range (0, num_frwdrs):
                     (ip, port, proto) = struct.unpack ("!LHH", options.data [8*i:8*(i+1)])
@@ -331,9 +328,7 @@ class EdnsServer (asyncio.DatagramProtocol):
             elif (options.otype == ENDS_OPTION_CODE_QUERY_ID):
                 query_id = struct.unpack ("!L", options.data)
             elif (options.otype == ENDS_OPTION_CODE_HOST_MAC):
-                for i in range (0, 6):
-                    host_mac.append(struct.unpack  ("!B", options.data[i]))
-
+                host_mac = strcut.unpack ("!s", options.data)
 
         return self.rate_limit.process_edns (host_details, forwarder_list,
                                              query_id, question, host_mac)
