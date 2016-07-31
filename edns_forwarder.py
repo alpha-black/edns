@@ -61,11 +61,13 @@ class Edns (dns.edns.Option):
         if (self.option == EDNS_OPTION_CODE_HOST):
             self.data += struct.pack ("!s", (self._get_hash (EDNS_OPTION_CODE_HOST)).encode('utf-8'))
             self.data += struct.pack ("!HH", self.port, self.proto)
-        if (self.option == EDNS_OPTION_CODE_FWDR):
+            print ("Port {0} proto {1}".format (self.port, self.proto))
+        elif (self.option == EDNS_OPTION_CODE_FWDR):
             self.data += self.ip
             self.data += struct.pack ("!HH", self.port, self.proto)
         elif (self.option == EDNS_OPTION_CODE_QUERY_ID):
             self.data += struct.pack ("!L", self.query_id)
+            print ("Query id {0}".format (self.query_id))
         elif (self.option == EDNS_OPTION_CODE_HOST_MAC):
             self.data += struct.pack ("!s", (self._get_hash (EDNS_OPTION_CODE_HOST_MAC)).encode('utf-8'))
 
@@ -108,7 +110,7 @@ class EdnsForwarderServer (asyncio.DatagramProtocol):
                     print ("Wrong formatted ENDS Forwarder")
                     return
                 found_frwdr_ends = True
-                edns_obj = Edns (addr[0], addr[1], option=EDNS_OPTION_CODE_FWDR,
+                edns_obj = Edns (ip=addr[0], port=addr[1], option=EDNS_OPTION_CODE_FWDR,
                                  data=options.data)
                 edns_options.append (edns_obj)
             elif (options.otype == EDNS_OPTION_CODE_QUERY_ID):
@@ -120,12 +122,12 @@ class EdnsForwarderServer (asyncio.DatagramProtocol):
 
         """ Add Host ENDS """
         if (found_host_edns == False):
-            print ("Adding host edns")
-            edns_obj = Edns (addr[0], addr[1], option=EDNS_OPTION_CODE_HOST)
+            print ("Adding host edns. Port {0}".format (addr[1]))
+            edns_obj = Edns (ip=addr[0], port=int(addr[1]), option=EDNS_OPTION_CODE_HOST)
             edns_options.insert (0, edns_obj)
 
             if (found_query_ends == False):
-                edns_obj = Edns (option=EDNS_OPTION_CODE_QUERY_ID, query_id = dns_message.id)
+                edns_obj = Edns (option=EDNS_OPTION_CODE_QUERY_ID, query_id=dns_message.id)
                 edns_options.append (edns_obj)
 
             #if (found_host_mac_edns == False):
@@ -133,7 +135,7 @@ class EdnsForwarderServer (asyncio.DatagramProtocol):
             #    edns_options.append (edns_obj)
 
         elif (found_frwdr_ends == False):
-            edns_obj = Edns (addr[0], addr[1], option=EDNS_OPTION_CODE_FWDR)
+            edns_obj = Edns (ip=addr[0], port=addr[1], option=EDNS_OPTION_CODE_FWDR)
             edns_options.append (edns_obj)
 
         dns_message.use_edns (options=edns_options)

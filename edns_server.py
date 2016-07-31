@@ -168,7 +168,7 @@ class RateLimiting ():
             for entry in host_forwarder_entry:
                 if entry == forwarder_ip_key:
                     entry_found = True
-                    break
+                    return True
             if (entry_found == False):
                 if (len (host_forwarder_entry) < host_forwarder_entry.maxlen):
                     ret = True
@@ -180,18 +180,22 @@ class RateLimiting ():
         """ IP spoofing. Consider only host IP """
         if len (host_details):
             ret &= self._rl_host_ip (host_details)
+            print ("RL host IP returns {0}".format (ret))
 
         """ Same forwarder list and similary query - question, query id """
-        if (len (host_details) and len (forwarder_list) and query_id and question):
+        if (len (host_details) and len (forwarder_list) and query_id):
             ret &= self._rl_forwarder_tree (host_details, forwarder_list, query_id, question)
+            print ("FRWDR List returns {0}".format (ret))
 
         """ Same MAC different ID """
         if (len (host_details) and len (host_mac)):
             ret &= self._rl_host_mac (host_details, host_mac)
+            print ("Host MAC returns {0}".format (ret))
 
         """ Same (subnet) IP but (too many) different forwarder list """
         if (len (host_details) and len (forwarder_list)):
             ret &= self._rl_same_ip_diff_forwarder (host_details, forwarder_list)
+            print ("Same IP diff forwarders returns {0}".format (ret))
 
         return ret
 
@@ -316,19 +320,26 @@ class EdnsServer (asyncio.DatagramProtocol):
             if (options.otype == EDNS_OPTION_CODE_HOST):
                 (host_ip, host_port, host_proto) = struct.unpack ("!sHH", options.data)
                 host_details = [host_ip, host_port, host_proto]
+                print ("Host details Hash of IP {0}, Port {1}, Proto {2}".format (host_ip, host_port, host_proto))
+
             elif (options.otype == EDNS_OPTION_CODE_FWDR):
                 data_len = len (options.data)
                 if (data_len % 8 != 0):
                     print ("Wrong formatted ENDS options")
                     return
+
+                print ("Forwarder details - Ip, port, proto")
                 num_frwdrs = (int) (data_len / 8)
                 for i in range (0, num_frwdrs):
                     (ip, port, proto) = struct.unpack ("!LHH", options.data [8*i:8*(i+1)])
                     forwarder_list.append ([ip, port, proto])
+                    print ("{0}, {1}, {2}".format (ip, port, proto))
             elif (options.otype == ENDS_OPTION_CODE_QUERY_ID):
-                query_id = struct.unpack ("!L", options.data)
+                query_id = int(struct.unpack ("!L", options.data)[0])
+                print ("Query Id {0}".format (query_id))
             elif (options.otype == ENDS_OPTION_CODE_HOST_MAC):
                 host_mac = strcut.unpack ("!s", options.data)
+                print ("Host MAC {0}".format (host_mac))
 
         return self.rate_limit.process_edns (host_details, forwarder_list,
                                              query_id, question, host_mac)
